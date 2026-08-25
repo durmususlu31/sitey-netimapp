@@ -1,5 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
+import {
+  fetchDashboardData,
+  createRecord,
+  updateRecord,
+  deleteRecord as dbDeleteRecord,
+  recordPayment,
+  fetchEntityDocuments,
+  createPropertyDocument,
+  deletePropertyDocument,
+  bulkCreateDues,
+  computeFinanceReport,
+} from './services/dbService'
+import {
+  loginUser,
+  logoutUser,
+} from './services/authService'
 
 type DashboardTab =
   | 'overview'
@@ -17,12 +33,6 @@ type CrudEntity = 'sites' | 'blocks' | 'apartments' | 'owners' | 'tenants' | 'du
 type DocumentCrudEntity = Exclude<CrudEntity, 'blocks' | 'expenses'>
 type FilterSection = CrudEntity | 'announcements' | 'tickets'
 type FinanceSubTab = 'overview' | 'dues' | 'payments' | 'expenses'
-
-type ApiEnvelope<T> = {
-  success: boolean
-  data?: T
-  error?: { code?: string; message?: string }
-}
 
 type Session = {
   userId: string
@@ -118,14 +128,6 @@ type FinanceReport = {
   topOverdueDues: OverdueDueSummary[]
 }
 
-type BulkCreateDuesResponse = {
-  totalTargeted: number
-  createdCount: number
-  skippedCount: number
-  messages: string[]
-  createdDues: Due[]
-}
-
 type BulkImportRow = {
   siteName: string
   blockName: string
@@ -139,15 +141,6 @@ type BulkImportRow = {
   gasAmount?: number
   billSupportAmount?: number
   description?: string
-}
-
-type BulkImportResultResponse = {
-  totalRows: number
-  successCount: number
-  skippedCount: number
-  errorCount: number
-  logs: string[]
-  importedDues: Due[]
 }
 
 type BulkDueModalState = {
@@ -651,10 +644,6 @@ const CRUD_CONFIG: Record<CrudEntity, CrudConfig> = {
   },
 }
 
-function getBaseUrl() {
-  return import.meta.env.VITE_API_BASE_URL || ''
-}
-
 function getSession(): Session | null {
   const raw = localStorage.getItem('site-management-session')
   if (!raw) return null
@@ -680,75 +669,6 @@ function saveSession(session: Session) {
 function clearSession() {
   localStorage.removeItem('site-management-session')
   notifySessionUpdated()
-}
-
-let refreshSessionPromise: Promise<Session | null> | null = null
-
-async function refreshSession(): Promise<Session | null> {
-  const currentSession = getSession()
-  if (!currentSession?.refreshToken) {
-    return null
-  }
-
-  if (!refreshSessionPromise) {
-    refreshSessionPromise = (async () => {
-      const response = await fetch(`${getBaseUrl()}/api/auth/refresh-token`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ refreshToken: currentSession.refreshToken }),
-      })
-
-      const text = await response.text()
-      const payload = text ? (JSON.parse(text) as ApiEnvelope<Session>) : null
-
-      if (!response.ok || payload?.success === false || !payload?.data) {
-        clearSession()
-        return null
-      }
-
-      const nextSession = payload.data
-      saveSession(nextSession)
-      return nextSession
-    })().finally(() => {
-      refreshSessionPromise = null
-    })
-  }
-
-  return refreshSessionPromise
-}
-
-async function apiRequest<T>(path: string, init: RequestInit = {}, token?: string, retryOnUnauthorized = true): Promise<T> {
-  const headers = new Headers(init.headers ?? {})
-  if (!(init.body instanceof FormData)) {
-    headers.set('Content-Type', 'application/json')
-  }
-
-  if (token) {
-    headers.set('Authorization', `Bearer ${token}`)
-  }
-
-  const response = await fetch(`${getBaseUrl()}${path}`, {
-    ...init,
-    headers,
-  })
-
-  if (response.status === 401 && token && retryOnUnauthorized) {
-    const refreshedSession = await refreshSession()
-    if (refreshedSession?.accessToken) {
-      return apiRequest<T>(path, init, refreshedSession.accessToken, false)
-    }
-  }
-
-  const text = await response.text()
-  const payload = text ? (JSON.parse(text) as ApiEnvelope<T>) : null
-
-  if (!response.ok || payload?.success === false) {
-    throw new Error(payload?.error?.message ?? 'İstek başarısız oldu.')
-  }
-
-  return (payload?.data ?? ({} as T)) as T
 }
 
 function formatDate(value?: string | null) {
@@ -1228,40 +1148,13 @@ function App() {
     }
   }, [])
 
-  const loadDashboardData = async (token: string) => {
+  const loadDashboardData = async (_token?: string) => {
     setLoading(true)
 
     try {
-      const [sites, blocks, apartments, owners, tenants, dues, payments, expenses, announcements, tickets, auditLogs, users, finance] = await Promise.all([
-        apiRequest<Site[]>('/api/sites', {}, token),
-        apiRequest<Block[]>('/api/blocks', {}, token),
-        apiRequest<Apartment[]>('/api/apartments', {}, token),
-        apiRequest<Owner[]>('/api/owners', {}, token),
-        apiRequest<Tenant[]>('/api/tenants', {}, token),
-        apiRequest<Due[]>('/api/dues', {}, token),
-        apiRequest<Payment[]>('/api/payments', {}, token),
-        apiRequest<Expense[]>('/api/expenses', {}, token),
-        apiRequest<Announcement[]>('/api/announcements', {}, token),
-        apiRequest<Ticket[]>('/api/tickets', {}, token),
-        apiRequest<AuditLog[]>('/api/auditlogs', {}, token),
-        apiRequest<UserRecord[]>('/api/users', {}, token),
-        apiRequest<FinanceReport>('/api/reports/finance', {}, token),
-      ])
-
-      setData({
-        sites,
-        blocks,
-        apartments,
-        owners,
-        tenants,
-        dues,
-        payments,
-        expenses,
-        announcements,
-        tickets,
-        auditLogs,
-        users,
-      })
+      const dashboardData = await fetchDashboardData()
+      setData(dashboardData)
+      const finance = computeFinanceReport(dashboardData)
       setFinanceReport(finance)
     } catch (error) {
       console.error(error)
@@ -1271,14 +1164,10 @@ function App() {
     }
   }
 
-  const refreshDocuments = async (entity: DocumentCrudEntity, id: string, token: string) => {
+  const refreshDocuments = async (entity: DocumentCrudEntity, id: string, _token?: string) => {
     setDocumentLoading(true)
     try {
-      const params = new URLSearchParams({
-        entityType: DOCUMENT_ENTITY_TYPES[entity],
-        entityId: id,
-      })
-      const documents = await apiRequest<PropertyDocument[]>(`/api/propertydocuments?${params.toString()}`, {}, token)
+      const documents = await fetchEntityDocuments(DOCUMENT_ENTITY_TYPES[entity], id)
       setPropertyDocuments(documents)
     } catch (error) {
       console.error(error)
@@ -1310,8 +1199,6 @@ function App() {
     return apartment ? getSiteNameFromBlockId(apartment.blockId) : '—'
   }
 
-
-
   const updateFilter = (section: FilterSection, patch: Partial<FilterState>) => {
     setFilters((current) => ({
       ...current,
@@ -1332,20 +1219,7 @@ function App() {
     setLoginError('')
 
     try {
-      const result = await apiRequest<Session>('/api/auth/login', {
-        method: 'POST',
-        body: JSON.stringify({
-          email: loginForm.email,
-          password: loginForm.password,
-        }),
-      })
-
-      const nextSession = {
-        ...result,
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
-      }
-
+      const nextSession = await loginUser(loginForm.email, loginForm.password)
       saveSession(nextSession)
       setSession(nextSession)
     } catch (error) {
@@ -1353,7 +1227,8 @@ function App() {
     }
   }
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await logoutUser()
     clearSession()
     setSession(null)
     setActiveTab('overview')
@@ -1415,12 +1290,14 @@ function App() {
     }
 
     const payload = config.toPayload(editForm)
-    const method = crudModal.mode === 'create' ? 'POST' : 'PUT'
-    const url = crudModal.mode === 'create' ? config.endpoint : `${config.endpoint}/${crudModal.id}`
 
     try {
       setLoading(true)
-      await apiRequest<void>(url, { method, body: JSON.stringify(payload) }, session.accessToken)
+      if (crudModal.mode === 'create') {
+        await createRecord(crudModal.entity, payload as any)
+      } else if (crudModal.id) {
+        await updateRecord(crudModal.entity, crudModal.id, payload as any)
+      }
       setCrudModal(null)
       setEditForm({})
       showNotice('success', crudModal.mode === 'create' ? 'Kayıt oluşturuldu.' : 'Değişiklikler kaydedildi.')
@@ -1440,21 +1317,14 @@ function App() {
 
     try {
       setDocumentSaving(true)
-      await apiRequest<PropertyDocument>(
-        '/api/propertydocuments',
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            entityType: DOCUMENT_ENTITY_TYPES[docEntity],
-            entityId: detailModal.id,
-            documentCategory: documentForm.documentCategory,
-            fileName: documentForm.fileName,
-            fileUrl: documentForm.fileUrl,
-            notes: documentForm.notes,
-          }),
-        },
-        session.accessToken,
-      )
+      await createPropertyDocument({
+        entityType: DOCUMENT_ENTITY_TYPES[docEntity],
+        entityId: detailModal.id,
+        documentCategory: documentForm.documentCategory,
+        fileName: documentForm.fileName,
+        fileUrl: documentForm.fileUrl,
+        notes: documentForm.notes,
+      })
       setDocumentForm(DEFAULT_DOCUMENT_FORM)
       showNotice('success', 'Doküman eklendi.')
       await refreshDocuments(docEntity, detailModal.id, session.accessToken)
@@ -1471,7 +1341,7 @@ function App() {
     const docEntity = detailModal.entity
 
     try {
-      await apiRequest(`/api/propertydocuments/${documentId}`, { method: 'DELETE' }, session.accessToken)
+      await deletePropertyDocument(documentId)
       showNotice('success', 'Doküman silindi.')
       await refreshDocuments(docEntity, detailModal.id, session.accessToken)
     } catch (error) {
@@ -1480,13 +1350,13 @@ function App() {
     }
   }
 
-  const deleteRecord = async (path: string, confirmationMessage: string) => {
+  const deleteRecord = async (collectionName: string, id: string, confirmationMessage: string) => {
     if (!session) return
     if (!window.confirm(confirmationMessage)) return
 
     try {
       setLoading(true)
-      await apiRequest<void>(path, { method: 'DELETE' }, session.accessToken)
+      await dbDeleteRecord(collectionName, id)
       showNotice('success', 'Kayıt silindi.')
       await loadDashboardData(session.accessToken)
     } catch (error) {
@@ -1498,43 +1368,31 @@ function App() {
   }
 
   const handleDeleteSite = (row: Record<string, unknown>) =>
-    void deleteRecord(`/api/sites/${String(row.id)}`, 'Bu siteyi silmek istediğinize emin misiniz?')
+    void deleteRecord('sites', String(row.id), 'Bu siteyi silmek istediğinize emin misiniz?')
 
   const handleDeleteBlock = (row: Record<string, unknown>) =>
-    void deleteRecord(
-      `/api/sites/${String(row.siteId)}/blocks/${String(row.id)}`,
-      'Bu bloğu silmek istediğinize emin misiniz?',
-    )
+    void deleteRecord('blocks', String(row.id), 'Bu bloğu silmek istediğinize emin misiniz?')
 
   const handleDeleteApartment = (row: Record<string, unknown>) =>
-    void deleteRecord(
-      `/api/blocks/${String(row.blockId)}/apartments/${String(row.id)}`,
-      'Bu daireyi silmek istediğinize emin misiniz?',
-    )
+    void deleteRecord('apartments', String(row.id), 'Bu daireyi silmek istediğinize emin misiniz?')
 
   const handleDeleteOwner = (row: Record<string, unknown>) =>
-    void deleteRecord(
-      `/api/apartments/${String(row.apartmentId)}/owners/${String(row.id)}`,
-      'Bu sahip kaydını silmek istediğinize emin misiniz?',
-    )
+    void deleteRecord('owners', String(row.id), 'Bu sahip kaydını silmek istediğinize emin misiniz?')
 
   const handleDeleteTenant = (row: Record<string, unknown>) =>
-    void deleteRecord(
-      `/api/apartments/${String(row.apartmentId)}/tenants/${String(row.id)}`,
-      'Bu kiracı kaydını silmek istediğinize emin misiniz?',
-    )
+    void deleteRecord('tenants', String(row.id), 'Bu kiracı kaydını silmek istediğinize emin misiniz?')
 
   const handleDeleteDue = (row: Record<string, unknown>) =>
-    void deleteRecord(`/api/dues/${String(row.id)}`, 'Bu aidatı silmek istediğinize emin misiniz?')
+    void deleteRecord('dues', String(row.id), 'Bu aidatı silmek istediğinize emin misiniz?')
 
   const handleDeleteAnnouncement = (row: Record<string, unknown>) =>
-    void deleteRecord(`/api/announcements/${String(row.id)}`, 'Bu duyuruyu silmek istediğinize emin misiniz?')
+    void deleteRecord('announcements', String(row.id), 'Bu duyuruyu silmek istediğinize emin misiniz?')
 
   const handleDeleteTicket = (row: Record<string, unknown>) =>
-    void deleteRecord(`/api/tickets/${String(row.id)}`, 'Bu talebi silmek istediğinize emin misiniz?')
+    void deleteRecord('tickets', String(row.id), 'Bu talebi silmek istediğinize emin misiniz?')
 
   const handleDeleteExpense = (row: Record<string, unknown>) =>
-    void deleteRecord(`/api/expenses/${String(row.id)}`, 'Bu gider kaydını silmek istediğinize emin misiniz?')
+    void deleteRecord('expenses', String(row.id), 'Bu gider kaydını silmek istediğinize emin misiniz?')
 
   const openPaymentConfirm = (due: Due, tenant?: Tenant | null) => {
     const associatedTenant =
@@ -1562,18 +1420,10 @@ function App() {
 
     setProcessingAction(true)
     try {
-      await apiRequest<Payment>(
-        '/api/payments',
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            dueId: paymentConfirmModal.due.id,
-            amountPaid: Number(paymentConfirmModal.amount),
-            paymentDate: new Date(paymentConfirmModal.paymentDate).toISOString(),
-            paymentMethod: paymentConfirmModal.paymentMethod,
-          }),
-        },
-        session.accessToken,
+      await recordPayment(
+        paymentConfirmModal.due.id,
+        Number(paymentConfirmModal.amount),
+        paymentConfirmModal.paymentMethod,
       )
 
       await loadDashboardData(session.accessToken)
@@ -1613,27 +1463,20 @@ function App() {
 
     setProcessingAction(true)
     try {
-      await apiRequest<Due>(
-        '/api/dues',
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            apartmentId: billModal.tenant.apartmentId,
-            tenantId: billModal.tenant.id,
-            dueType: 'FATURA',
-            amount: net,
-            electricityAmount: Number(billModal.electricity || 0),
-            waterAmount: Number(billModal.water || 0),
-            gasAmount: Number(billModal.gas || 0),
-            billSupportAmount: Number(billModal.support || 0),
-            description: billModal.description || `${billModal.period} Elektrik/Su/Gaz Faturası`,
-            period: billModal.period,
-            dueDate: new Date(billModal.dueDate).toISOString(),
-            status: 'PENDING',
-          }),
-        },
-        session.accessToken,
-      )
+      await createRecord('dues', {
+        apartmentId: billModal.tenant.apartmentId,
+        tenantId: billModal.tenant.id,
+        dueType: 'FATURA' as any,
+        amount: net,
+        electricityAmount: Number(billModal.electricity || 0),
+        waterAmount: Number(billModal.water || 0),
+        gasAmount: Number(billModal.gas || 0),
+        billSupportAmount: Number(billModal.support || 0),
+        description: billModal.description || `${billModal.period} Elektrik/Su/Gaz Faturası`,
+        period: billModal.period,
+        dueDate: new Date(billModal.dueDate).toISOString(),
+        status: 'PENDING' as any,
+      })
 
       await loadDashboardData(session.accessToken)
       showNotice(
@@ -1660,45 +1503,31 @@ function App() {
 
       if (tenant.monthlyRent && Number(tenant.monthlyRent) > 0) {
         promises.push(
-          apiRequest<Due>(
-            '/api/dues',
-            {
-              method: 'POST',
-              body: JSON.stringify({
-                apartmentId: tenant.apartmentId,
-                tenantId: tenant.id,
-                dueType: 'KIRA',
-                amount: Number(tenant.monthlyRent),
-                period,
-                dueDate: dueDate.toISOString(),
-                description: `${period} Kira Bedeli`,
-                status: 'PENDING',
-              }),
-            },
-            session.accessToken,
-          ),
+          createRecord('dues', {
+            apartmentId: tenant.apartmentId,
+            tenantId: tenant.id,
+            dueType: 'KIRA' as any,
+            amount: Number(tenant.monthlyRent),
+            period,
+            dueDate: dueDate.toISOString(),
+            description: `${period} Kira Bedeli`,
+            status: 'PENDING' as any,
+          })
         )
       }
 
       if (tenant.monthlyDue && Number(tenant.monthlyDue) > 0) {
         promises.push(
-          apiRequest<Due>(
-            '/api/dues',
-            {
-              method: 'POST',
-              body: JSON.stringify({
-                apartmentId: tenant.apartmentId,
-                tenantId: tenant.id,
-                dueType: 'AIDAT',
-                amount: Number(tenant.monthlyDue),
-                period,
-                dueDate: dueDate.toISOString(),
-                description: `${period} Aidat Bedeli`,
-                status: 'PENDING',
-              }),
-            },
-            session.accessToken,
-          ),
+          createRecord('dues', {
+            apartmentId: tenant.apartmentId,
+            tenantId: tenant.id,
+            dueType: 'AIDAT' as any,
+            amount: Number(tenant.monthlyDue),
+            period,
+            dueDate: dueDate.toISOString(),
+            description: `${period} Aidat Bedeli`,
+            status: 'PENDING' as any,
+          })
         )
       }
 
@@ -1769,7 +1598,10 @@ function App() {
 
     setProcessingAction(true)
     try {
-      const payload = {
+      const res = await bulkCreateDues({
+        scope: bulkDueModal.scope,
+        siteId: bulkDueModal.siteId,
+        blockId: bulkDueModal.blockId,
         apartmentIds: bulkDueModal.apartmentIds,
         period: bulkDueModal.period,
         dueDate: new Date(bulkDueModal.dueDate).toISOString(),
@@ -1782,16 +1614,7 @@ function App() {
         billSupportAmount: bulkDueModal.dueType === 'FATURA' ? Number(bulkDueModal.billSupportAmount || 0) : undefined,
         description: bulkDueModal.description || `${bulkDueModal.period} Toplu ${translateDueType(bulkDueModal.dueType)}`,
         skipDuplicates: bulkDueModal.skipDuplicates,
-      }
-
-      const res = await apiRequest<BulkCreateDuesResponse>(
-        '/api/dues/bulk',
-        {
-          method: 'POST',
-          body: JSON.stringify(payload),
-        },
-        session.accessToken,
-      )
+      })
 
       await loadDashboardData(session.accessToken)
       setSelectedApartmentIds(new Set())
@@ -1830,19 +1653,35 @@ function App() {
 
     setProcessingAction(true)
     try {
-      const res = await apiRequest<BulkImportResultResponse>(
-        '/api/dues/import',
-        {
-          method: 'POST',
-          body: JSON.stringify(bulkImportModal.parsedRows),
-        },
-        session.accessToken,
-      )
+      let successCount = 0
+      for (const row of bulkImportModal.parsedRows) {
+        const apt = data.apartments.find((a) => a.apartmentNumber.includes(row.apartmentNumber) || row.apartmentNumber.includes(a.apartmentNumber))
+        const tenant = apt ? data.tenants.find((t) => t.apartmentId === apt.id && t.isActive) : null
+
+        if (apt) {
+          await createRecord('dues', {
+            apartmentId: apt.id,
+            tenantId: tenant?.id || null,
+            dueType: row.dueType as any,
+            amount: Number(row.amount || 0),
+            period: row.period,
+            dueDate: new Date(row.dueDate).toISOString(),
+            status: 'PENDING' as any,
+            electricityAmount: row.electricityAmount || null,
+            waterAmount: row.waterAmount || null,
+            gasAmount: row.gasAmount || null,
+            billSupportAmount: row.billSupportAmount || null,
+            grossAmount: Number(row.amount || 0),
+            description: row.description || `${row.period} İçe Aktarılan Tahakkuk`,
+          })
+          successCount++
+        }
+      }
 
       await loadDashboardData(session.accessToken)
       showNotice(
         'success',
-        `✅ İçe Aktarma Başarılı: ${res.successCount} kayıt eklendi${res.skippedCount > 0 ? `, ${res.skippedCount} mükerrer atlandı` : ''}${res.errorCount > 0 ? `, ${res.errorCount} hatalı` : ''}.`,
+        `✅ İçe Aktarma Başarılı: ${successCount} kayıt eklendi.`,
       )
       setBulkImportModal(null)
     } catch (error) {
