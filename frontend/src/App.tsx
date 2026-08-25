@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import {
   fetchDashboardData,
@@ -1220,7 +1220,7 @@ function App() {
     }
   }, [])
 
-  const loadDashboardData = async (_token?: string) => {
+  const loadDashboardData = useCallback(async (_token?: string) => {
     setLoading(true)
 
     try {
@@ -1234,7 +1234,7 @@ function App() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   const refreshDocuments = async (entity: DocumentCrudEntity, id: string, _token?: string) => {
     setDocumentLoading(true)
@@ -1254,22 +1254,22 @@ function App() {
     if (!session) return
 
     void loadDashboardData(session.accessToken)
-  }, [session])
+  }, [session, loadDashboardData])
 
   const blocksById = useMemo(() => new Map(data.blocks.map((item) => [item.id, item])), [data.blocks])
   const sitesById = useMemo(() => new Map(data.sites.map((item) => [item.id, item])), [data.sites])
   const apartmentsById = useMemo(() => new Map(data.apartments.map((item) => [item.id, item])), [data.apartments])
 
-  const getBlockName = (blockId: string) => blocksById.get(blockId)?.name ?? '—'
-  const getSiteNameFromBlockId = (blockId: string) => {
+  const getBlockName = useCallback((blockId: string) => blocksById.get(blockId)?.name ?? '—', [blocksById])
+  const getSiteNameFromBlockId = useCallback((blockId: string) => {
     const block = blocksById.get(blockId)
     return block ? sitesById.get(block.siteId)?.name ?? '—' : '—'
-  }
-  const getApartmentLabel = (apartmentId: string) => apartmentsById.get(apartmentId)?.apartmentNumber ?? apartmentId
-  const getSiteNameFromApartmentId = (apartmentId: string) => {
+  }, [blocksById, sitesById])
+  const getApartmentLabel = useCallback((apartmentId: string) => apartmentsById.get(apartmentId)?.apartmentNumber ?? apartmentId, [apartmentsById])
+  const getSiteNameFromApartmentId = useCallback((apartmentId: string) => {
     const apartment = apartmentsById.get(apartmentId)
     return apartment ? getSiteNameFromBlockId(apartment.blockId) : '—'
-  }
+  }, [apartmentsById, getSiteNameFromBlockId])
 
   const updateFilter = (section: FilterSection, patch: Partial<FilterState>) => {
     setFilters((current) => ({
@@ -1901,7 +1901,7 @@ function App() {
           return factor * compareText(left.name, right.name)
       }
     })
-  }, [data.blocks, filters.blocks, blocksById, sitesById])
+  }, [data.blocks, filters.blocks, getSiteNameFromBlockId])
 
   const filteredApartments = useMemo(() => {
     const state = filters.apartments
@@ -1934,7 +1934,7 @@ function App() {
           return factor * compareNumber(left.floor, right.floor)
       }
     })
-  }, [data.apartments, filters.apartments, blocksById, sitesById])
+  }, [data.apartments, filters.apartments, getBlockName, getSiteNameFromBlockId])
 
   const filteredOwners = useMemo(() => {
     const state = filters.owners
@@ -1967,7 +1967,7 @@ function App() {
           return factor * compareText(left.fullName, right.fullName)
       }
     })
-  }, [data.owners, filters.owners, apartmentsById, blocksById, sitesById])
+  }, [data.owners, filters.owners, getApartmentLabel, getSiteNameFromApartmentId])
 
   const filteredTenants = useMemo(() => {
     const state = filters.tenants
@@ -2000,7 +2000,7 @@ function App() {
           return factor * compareText(left.fullName, right.fullName)
       }
     })
-  }, [data.tenants, filters.tenants, apartmentsById, blocksById, sitesById])
+  }, [data.tenants, filters.tenants, getApartmentLabel, getSiteNameFromApartmentId])
 
   const filteredDues = useMemo(() => {
     const state = filters.dues
@@ -2038,7 +2038,7 @@ function App() {
           return factor * compareText(left.dueDate, right.dueDate)
       }
     })
-  }, [data.dues, filters.dues, apartmentsById, blocksById, sitesById])
+  }, [data.dues, filters.dues, apartmentsById, blocksById, getApartmentLabel, getSiteNameFromApartmentId])
 
   const filteredAnnouncements = useMemo(() => {
     const state = filters.announcements
