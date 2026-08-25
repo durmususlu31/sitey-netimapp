@@ -264,9 +264,28 @@ export async function setDoc(reference: DocumentReference, data: any): Promise<v
   console.log(`🔥 [Firestore Canlı Kaydedildi] ${reference.path}`)
 }
 
-// UPDATE document in Firestore REST API
+// UPDATE document in Firestore REST API (using updateMask for partial patch)
 export async function updateDoc(reference: DocumentReference, data: Record<string, any>): Promise<void> {
-  await setDoc(reference, data)
+  const projectId = getProjectId()
+  const keys = Object.keys(data)
+  if (keys.length === 0) return
+
+  const queryParams = keys.map((key) => `updateMask.fieldPaths=${key}`).join('&')
+  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${reference.path}?${queryParams}`
+
+  const body = {
+    fields: toFirestoreFields(data),
+  }
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const errText = await res.text()
+    throw new Error(`Firestore updateDoc failed on [${reference.path}]: ${res.statusText} (${errText})`)
+  }
+  console.log(`🔥 [Firestore Canlı Güncellendi] ${reference.path}`)
 }
 
 // DELETE document in Firestore REST API
