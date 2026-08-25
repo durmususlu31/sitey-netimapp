@@ -212,7 +212,12 @@ type CrudConfig = {
     placeholder?: string
     helpText?: string
     required?: boolean
-    selectOptions?: (data: DashboardData) => SelectOption[]
+    selectOptions?: (
+      data: DashboardData,
+      formValues?: Record<string, FormFieldValue>,
+      mode?: 'create' | 'edit',
+      entityId?: string
+    ) => SelectOption[]
   }[]
   getInitialValues: () => Record<string, FormFieldValue>
   setValuesFromRow: (row: Record<string, unknown>) => Record<string, FormFieldValue>
@@ -375,7 +380,7 @@ const CRUD_CONFIG: Record<CrudEntity, CrudConfig> = {
         selectOptions: (data) =>
           [...data.blocks]
             .sort((left, right) => getBlockDisplayLabel(left, data).localeCompare(getBlockDisplayLabel(right, data), 'tr-TR'))
-            .map((block) => ({ label: getBlockDisplayLabel(block, data), value: block.id })),
+            .map((block) => ({ label: `🏗️ ${getBlockDisplayLabel(block, data)}`, value: block.id })),
       },
       {
         key: 'ownerId',
@@ -383,18 +388,28 @@ const CRUD_CONFIG: Record<CrudEntity, CrudConfig> = {
         type: 'select',
         placeholder: '— Sahip Seçilmedi (İsteğe Bağlı) —',
         required: false,
-        helpText: 'Dairenin tapu sahibi olan kişiyi seçin (İsteğe bağlı).',
-        selectOptions: (data) => {
-          const ownerOptions = data.owners.map((owner) => {
-            const apt = data.apartments.find((a) => a.id === owner.apartmentId)
-            const aptLabel = apt ? ` [${apt.apartmentNumber}]` : ''
+        helpText: 'Dairenin tapu sahibi olan kişiyi seçin (Başka daireye atanmış kişiler gizlenir).',
+        selectOptions: (data, _formValues, mode, entityId) => {
+          // Filter out owners already assigned to other apartments
+          const availableOwners = data.owners.filter((owner) => {
+            if (!owner.apartmentId) return true
+            if (mode === 'edit' && entityId && owner.apartmentId === entityId) return true
+            const otherApt = data.apartments.find((a) => a.id !== entityId && a.ownerId === owner.id)
+            return !otherApt
+          })
+          const ownerOptions = availableOwners.map((owner) => {
+            const isCurrent = mode === 'edit' && entityId && owner.apartmentId === entityId
             return {
-              label: `👤 ${owner.fullName}${owner.phone ? ` (${owner.phone})` : ''}${aptLabel}`,
+              label: `👤 ${owner.fullName}${owner.phone ? ` (${owner.phone})` : ''}${isCurrent ? ' [Mevcut]' : ''}`,
               value: owner.id,
             }
           })
           const userOptions = data.users
-            .filter((u) => !data.owners.some((o) => o.id === u.id || o.email === u.email))
+            .filter((u) => {
+              if (data.owners.some((o) => o.id === u.id || o.email === u.email)) return false
+              const otherApt = data.apartments.find((a) => a.id !== entityId && a.ownerId === u.id)
+              return !otherApt
+            })
             .map((user) => ({
               label: `👤 ${user.fullName} (${user.email})`,
               value: user.id,
@@ -408,17 +423,29 @@ const CRUD_CONFIG: Record<CrudEntity, CrudConfig> = {
         type: 'select',
         placeholder: '— Kiracı Yok / Boş Daire (İsteğe Bağlı) —',
         required: false,
-        helpText: 'Dairede fiilen oturan kiracıyı seçin (İsteğe bağlı).',
-        selectOptions: (data) => {
-          const tenantOptions = data.tenants.map((tenant) => {
+        helpText: 'Dairede fiilen oturan kiracıyı seçin (Başka dairede oturan kiracılar gizlenir).',
+        selectOptions: (data, _formValues, mode, entityId) => {
+          // Filter out tenants already assigned to other apartments
+          const availableTenants = data.tenants.filter((tenant) => {
+            if (!tenant.apartmentId) return true
+            if (mode === 'edit' && entityId && tenant.apartmentId === entityId) return true
+            const otherApt = data.apartments.find((a) => a.id !== entityId && a.residentId === tenant.id)
+            return !otherApt
+          })
+          const tenantOptions = availableTenants.map((tenant) => {
             const rent = tenant.monthlyRent ? ` - ${tenant.monthlyRent} ₺` : ''
+            const isCurrent = mode === 'edit' && entityId && tenant.apartmentId === entityId
             return {
-              label: `🔑 ${tenant.fullName}${tenant.phone ? ` (${tenant.phone})` : ''}${rent}`,
+              label: `🔑 ${tenant.fullName}${tenant.phone ? ` (${tenant.phone})` : ''}${rent}${isCurrent ? ' [Mevcut]' : ''}`,
               value: tenant.id,
             }
           })
           const userOptions = data.users
-            .filter((u) => !data.tenants.some((t) => t.id === u.id || t.email === u.email))
+            .filter((u) => {
+              if (data.tenants.some((t) => t.id === u.id || t.email === u.email)) return false
+              const otherApt = data.apartments.find((a) => a.id !== entityId && a.residentId === u.id)
+              return !otherApt
+            })
             .map((user) => ({
               label: `🔑 ${user.fullName} (${user.email})`,
               value: user.id,
@@ -472,15 +499,19 @@ const CRUD_CONFIG: Record<CrudEntity, CrudConfig> = {
         key: 'apartmentId',
         label: 'Daire',
         type: 'select',
-        placeholder: 'Daire seçin',
+        placeholder: '— Daire Seçin —',
         required: true,
         helpText: 'Bu kaydı hangi daireye bağlamak istediğinizi seçin.',
-        selectOptions: (data) =>
+        selectOptions: (data, _formValues, _mode, entityId) =>
           [...data.apartments]
             .sort((left, right) =>
               getApartmentDisplayLabel(left, data).localeCompare(getApartmentDisplayLabel(right, data), 'tr-TR'),
             )
-            .map((apartment) => ({ label: getApartmentDisplayLabel(apartment, data), value: apartment.id })),
+            .map((apartment) => {
+              const existingOwner = data.owners.find((o) => o.apartmentId === apartment.id && o.id !== entityId)
+              const ownerBadge = existingOwner ? ` [Mevcut: ${existingOwner.fullName}]` : ' [Müsait]'
+              return { label: `🚪 ${getApartmentDisplayLabel(apartment, data)}${ownerBadge}`, value: apartment.id }
+            }),
       },
       { key: 'fullName', label: 'Ad soyad', type: 'text', required: true, helpText: 'Kişinin sistemde görünecek tam adı.' },
       { key: 'phone', label: 'Telefon', type: 'text', helpText: 'İletişim için cep telefonu.' },
@@ -515,15 +546,19 @@ const CRUD_CONFIG: Record<CrudEntity, CrudConfig> = {
         key: 'apartmentId',
         label: 'Daire',
         type: 'select',
-        placeholder: 'Daire seçin',
+        placeholder: '— Daire Seçin —',
         required: true,
-        helpText: 'Aidatın bağlı olduğu daireyi seçin.',
-        selectOptions: (data) =>
+        helpText: 'Kiracının ikamet ettiği daireyi seçin.',
+        selectOptions: (data, _formValues, _mode, entityId) =>
           [...data.apartments]
             .sort((left, right) =>
               getApartmentDisplayLabel(left, data).localeCompare(getApartmentDisplayLabel(right, data), 'tr-TR'),
             )
-            .map((apartment) => ({ label: getApartmentDisplayLabel(apartment, data), value: apartment.id })),
+            .map((apartment) => {
+              const existingTenant = data.tenants.find((t) => t.apartmentId === apartment.id && t.isActive && t.id !== entityId)
+              const statusBadge = existingTenant ? ` [Dolu: ${existingTenant.fullName}]` : ' [Müsait / Boş]'
+              return { label: `🚪 ${getApartmentDisplayLabel(apartment, data)}${statusBadge}`, value: apartment.id }
+            }),
       },
       { key: 'fullName', label: 'Ad soyad', type: 'text', required: true, helpText: 'Kişinin sistemde görünecek tam adı.' },
       { key: 'phone', label: 'Telefon', type: 'text', required: true, helpText: 'İletişim için cep telefonu.' },
@@ -573,14 +608,18 @@ const CRUD_CONFIG: Record<CrudEntity, CrudConfig> = {
         key: 'apartmentId',
         label: 'Daire',
         type: 'select',
-        placeholder: 'Daire seçin',
+        placeholder: '— Daire Seçin —',
         required: true,
         selectOptions: (data) =>
           [...data.apartments]
             .sort((left, right) =>
               getApartmentDisplayLabel(left, data).localeCompare(getApartmentDisplayLabel(right, data), 'tr-TR'),
             )
-            .map((apartment) => ({ label: getApartmentDisplayLabel(apartment, data), value: apartment.id })),
+            .map((apartment) => {
+              const tenant = data.tenants.find((t) => t.apartmentId === apartment.id && t.isActive)
+              const tenantLabel = tenant ? ` (Kiracı: ${tenant.fullName})` : ' (Boş)'
+              return { label: `🚪 ${getApartmentDisplayLabel(apartment, data)}${tenantLabel}`, value: apartment.id }
+            }),
       },
       {
         key: 'dueType',
@@ -1326,11 +1365,53 @@ function App() {
 
     try {
       setLoading(true)
+      let savedRecord: any = null
       if (crudModal.mode === 'create') {
-        await createRecord(crudModal.entity, payload as any)
+        savedRecord = await createRecord(crudModal.entity, payload as any)
       } else if (crudModal.id) {
-        await updateRecord(crudModal.entity, crudModal.id, payload as any)
+        savedRecord = await updateRecord(crudModal.entity, crudModal.id, payload as any)
       }
+
+      // Two-way relational synchronizations
+      if (crudModal.entity === 'apartments') {
+        const aptId = crudModal.mode === 'create' ? (savedRecord?.id || (payload as any).id) : crudModal.id
+        const newOwnerId = (payload as any).ownerId
+        const newResidentId = (payload as any).residentId
+
+        if (aptId) {
+          if (newOwnerId) {
+            const owner = data.owners.find((o) => o.id === newOwnerId)
+            if (owner && owner.apartmentId !== aptId) {
+              await updateRecord('owners', owner.id, { apartmentId: aptId })
+            }
+          }
+          if (newResidentId) {
+            const tenant = data.tenants.find((t) => t.id === newResidentId)
+            if (tenant && tenant.apartmentId !== aptId) {
+              await updateRecord('tenants', tenant.id, { apartmentId: aptId })
+            }
+          }
+        }
+      } else if (crudModal.entity === 'owners') {
+        const ownerId = crudModal.mode === 'create' ? (savedRecord?.id || (payload as any).id) : crudModal.id
+        const targetAptId = (payload as any).apartmentId
+        if (targetAptId && ownerId) {
+          const apt = data.apartments.find((a) => a.id === targetAptId)
+          if (apt && apt.ownerId !== ownerId) {
+            await updateRecord('apartments', apt.id, { ownerId })
+          }
+        }
+      } else if (crudModal.entity === 'tenants') {
+        const tenantId = crudModal.mode === 'create' ? (savedRecord?.id || (payload as any).id) : crudModal.id
+        const targetAptId = (payload as any).apartmentId
+        if (targetAptId && tenantId) {
+          const apt = data.apartments.find((a) => a.id === targetAptId)
+          if (apt && apt.residentId !== tenantId) {
+            await updateRecord('apartments', apt.id, { residentId: tenantId })
+          }
+        }
+      }
+
       setCrudModal(null)
       setEditForm({})
       showNotice('success', crudModal.mode === 'create' ? 'Kayıt oluşturuldu.' : 'Değişiklikler kaydedildi.')
@@ -1389,6 +1470,29 @@ function App() {
 
     try {
       setLoading(true)
+
+      // Cascade clear relations
+      if (collectionName === 'apartments') {
+        const attachedOwners = data.owners.filter((o) => o.apartmentId === id)
+        for (const o of attachedOwners) {
+          await updateRecord('owners', o.id, { apartmentId: null })
+        }
+        const attachedTenants = data.tenants.filter((t) => t.apartmentId === id)
+        for (const t of attachedTenants) {
+          await updateRecord('tenants', t.id, { apartmentId: null })
+        }
+      } else if (collectionName === 'owners') {
+        const attachedApts = data.apartments.filter((a) => a.ownerId === id)
+        for (const a of attachedApts) {
+          await updateRecord('apartments', a.id, { ownerId: null })
+        }
+      } else if (collectionName === 'tenants') {
+        const attachedApts = data.apartments.filter((a) => a.residentId === id)
+        for (const a of attachedApts) {
+          await updateRecord('apartments', a.id, { residentId: null })
+        }
+      }
+
       await dbDeleteRecord(collectionName, id)
       showNotice('success', 'Kayıt silindi.')
       await loadDashboardData(session.accessToken)
@@ -4180,7 +4284,7 @@ function App() {
                   }
 
                   if (field.type === 'select') {
-                    const options = field.selectOptions?.(data) ?? [
+                    const options = field.selectOptions?.(data, editForm, crudModal.mode, crudModal.id) ?? [
                       { value: 'PENDING', label: 'Beklemede' },
                       { value: 'PAID', label: 'Ödendi' },
                       { value: 'OVERDUE', label: 'Gecikmiş' },
