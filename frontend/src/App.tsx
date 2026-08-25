@@ -388,12 +388,15 @@ const CRUD_CONFIG: Record<CrudEntity, CrudConfig> = {
         type: 'select',
         placeholder: '— Sahip Seçilmedi (İsteğe Bağlı) —',
         required: false,
-        helpText: 'Dairenin tapu sahibi olan kişiyi seçin (Başka daireye atanmış kişiler gizlenir).',
+        helpText: 'Dairenin tapu sahibi olan kişiyi seçin (Bir daireye bağlı olan kişiler gizlenir).',
         selectOptions: (data, _formValues, mode, entityId) => {
-          // Filter out owners already assigned to other apartments
           const availableOwners = data.owners.filter((owner) => {
-            if (!owner.apartmentId) return true
-            if (mode === 'edit' && entityId && owner.apartmentId === entityId) return true
+            if (mode === 'create') {
+              if (owner.apartmentId && String(owner.apartmentId).trim() !== '') return false
+              const isAssigned = data.apartments.some((a) => a.ownerId === owner.id)
+              return !isAssigned
+            }
+            if (owner.apartmentId && owner.apartmentId !== entityId) return false
             const otherApt = data.apartments.find((a) => a.id !== entityId && a.ownerId === owner.id)
             return !otherApt
           })
@@ -407,6 +410,10 @@ const CRUD_CONFIG: Record<CrudEntity, CrudConfig> = {
           const userOptions = data.users
             .filter((u) => {
               if (data.owners.some((o) => o.id === u.id || o.email === u.email)) return false
+              if (mode === 'create') {
+                const isAssigned = data.apartments.some((a) => a.ownerId === u.id)
+                return !isAssigned
+              }
               const otherApt = data.apartments.find((a) => a.id !== entityId && a.ownerId === u.id)
               return !otherApt
             })
@@ -423,12 +430,15 @@ const CRUD_CONFIG: Record<CrudEntity, CrudConfig> = {
         type: 'select',
         placeholder: '— Kiracı Yok / Boş Daire (İsteğe Bağlı) —',
         required: false,
-        helpText: 'Dairede fiilen oturan kiracıyı seçin (Başka dairede oturan kiracılar gizlenir).',
+        helpText: 'Dairede fiilen oturan kiracıyı seçin (Bir daireye bağlı olan kiracılar gizlenir).',
         selectOptions: (data, _formValues, mode, entityId) => {
-          // Filter out tenants already assigned to other apartments
           const availableTenants = data.tenants.filter((tenant) => {
-            if (!tenant.apartmentId) return true
-            if (mode === 'edit' && entityId && tenant.apartmentId === entityId) return true
+            if (mode === 'create') {
+              if (tenant.apartmentId && String(tenant.apartmentId).trim() !== '') return false
+              const isAssigned = data.apartments.some((a) => a.residentId === tenant.id)
+              return !isAssigned
+            }
+            if (tenant.apartmentId && tenant.apartmentId !== entityId) return false
             const otherApt = data.apartments.find((a) => a.id !== entityId && a.residentId === tenant.id)
             return !otherApt
           })
@@ -443,6 +453,10 @@ const CRUD_CONFIG: Record<CrudEntity, CrudConfig> = {
           const userOptions = data.users
             .filter((u) => {
               if (data.tenants.some((t) => t.id === u.id || t.email === u.email)) return false
+              if (mode === 'create') {
+                const isAssigned = data.apartments.some((a) => a.residentId === u.id)
+                return !isAssigned
+              }
               const otherApt = data.apartments.find((a) => a.id !== entityId && a.residentId === u.id)
               return !otherApt
             })
