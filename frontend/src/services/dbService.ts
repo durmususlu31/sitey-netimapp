@@ -120,8 +120,17 @@ export async function fetchDashboardData(): Promise<DashboardData> {
       const auditLogs = auditSnap.docs.map((d: any) => ({ id: d.id, ...d.data() } as AuditLog))
       const users = usersSnap.docs.map((d: any) => ({ id: d.id, ...d.data() } as UserRecord))
 
-      // If Firestore is completely empty, initialize with seed data
-      if (sites.length === 0 && users.length === 0) {
+      // If Firestore is completely empty (no sites, blocks, apartments, owners, tenants, or users), initialize with seed data
+      const totalDocs =
+        sites.length +
+        blocks.length +
+        apartments.length +
+        owners.length +
+        tenants.length +
+        users.length
+
+      if (totalDocs === 0) {
+        console.log('Database is completely empty. Seeding initial template data...')
         await seedFirestoreInitialData()
         return fetchDashboardData()
       }

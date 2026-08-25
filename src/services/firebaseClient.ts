@@ -221,31 +221,26 @@ export async function getDocs(queryOrCollection: CollectionReference | any): Pro
   const collectionName = queryOrCollection.path || queryOrCollection.id
   const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${collectionName}?pageSize=500`
 
-  try {
-    const res = await fetch(url)
-    if (!res.ok) {
-      console.warn(`Firestore getDocs failed for [${collectionName}]:`, res.statusText)
-      return { docs: [], empty: true, size: 0 }
-    }
-    const data = await res.json()
-    const documents = data.documents || []
+  const res = await fetch(url)
+  if (!res.ok) {
+    const errText = await res.text()
+    throw new Error(`Firestore getDocs failed for [${collectionName}]: ${res.statusText} (${errText})`)
+  }
+  const data = await res.json()
+  const documents = data.documents || []
 
-    const docs: QueryDocumentSnapshot[] = documents.map((docItem: any) => {
-      const parsedData = fromFirestoreDocument(docItem)
-      return {
-        id: parsedData.id,
-        data: () => parsedData,
-      }
-    })
-
+  const docs: QueryDocumentSnapshot[] = documents.map((docItem: any) => {
+    const parsedData = fromFirestoreDocument(docItem)
     return {
-      docs,
-      empty: docs.length === 0,
-      size: docs.length,
+      id: parsedData.id,
+      data: () => parsedData,
     }
-  } catch (err) {
-    console.error(`Error fetching collection [${collectionName}] from Firestore:`, err)
-    return { docs: [], empty: true, size: 0 }
+  })
+
+  return {
+    docs,
+    empty: docs.length === 0,
+    size: docs.length,
   }
 }
 
@@ -254,24 +249,19 @@ export async function setDoc(reference: DocumentReference, data: any): Promise<v
   const projectId = getProjectId()
   const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${reference.path}`
 
-  try {
-    const body = {
-      fields: toFirestoreFields(data),
-    }
-    const res = await fetch(url, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    if (!res.ok) {
-      const errText = await res.text()
-      console.warn(`Firestore setDoc error on [${reference.path}]:`, errText)
-    } else {
-      console.log(`🔥 [Firestore Canlı Kaydedildi] ${reference.path}`)
-    }
-  } catch (err) {
-    console.error(`Failed to save document [${reference.path}] to Firestore:`, err)
+  const body = {
+    fields: toFirestoreFields(data),
   }
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const errText = await res.text()
+    throw new Error(`Firestore setDoc failed on [${reference.path}]: ${res.statusText} (${errText})`)
+  }
+  console.log(`🔥 [Firestore Canlı Kaydedildi] ${reference.path}`)
 }
 
 // UPDATE document in Firestore REST API
@@ -284,18 +274,14 @@ export async function deleteDoc(reference: DocumentReference): Promise<void> {
   const projectId = getProjectId()
   const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${reference.path}`
 
-  try {
-    const res = await fetch(url, {
-      method: 'DELETE',
-    })
-    if (!res.ok) {
-      console.warn(`Firestore deleteDoc error on [${reference.path}]:`, res.statusText)
-    } else {
-      console.log(`🔥 [Firestore Canlı Silindi] ${reference.path}`)
-    }
-  } catch (err) {
-    console.error(`Failed to delete document [${reference.path}] from Firestore:`, err)
+  const res = await fetch(url, {
+    method: 'DELETE',
+  })
+  if (!res.ok) {
+    const errText = await res.text()
+    throw new Error(`Firestore deleteDoc failed on [${reference.path}]: ${res.statusText} (${errText})`)
   }
+  console.log(`🔥 [Firestore Canlı Silindi] ${reference.path}`)
 }
 
 export function query(collectionRef: CollectionReference, ..._queryConstraints: any[]): CollectionReference {
@@ -311,20 +297,26 @@ export function orderBy(fieldPath: string, directionStr?: 'asc' | 'desc'): { fie
 }
 
 export function writeBatch(_firestore: Firestore): WriteBatch {
+  const operations: (() => Promise<void>)[] = []
   return {
     set: function(documentRef: DocumentReference, data: any) {
-      void setDoc(documentRef, data)
+      operations.push(() => setDoc(documentRef, data))
       return this
     },
     update: function(documentRef: DocumentReference, data: Record<string, any>) {
-      void updateDoc(documentRef, data)
+      operations.push(() => updateDoc(documentRef, data))
       return this
     },
     delete: function(documentRef: DocumentReference) {
-      void deleteDoc(documentRef)
+      operations.push(() => deleteDoc(documentRef))
       return this
     },
-    commit: async function() {},
+    commit: async function() {
+      // Execute all operations sequentially to avoid rate-limiting and guarantee order
+      for (const op of operations) {
+        await op()
+      }
+    },
   }
 }
 
