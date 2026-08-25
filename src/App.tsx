@@ -369,9 +369,9 @@ const CRUD_CONFIG: Record<CrudEntity, CrudConfig> = {
         key: 'blockId',
         label: 'Blok',
         type: 'select',
-        placeholder: 'Blok seçin',
+        placeholder: '— Blok Seçin —',
         required: true,
-        helpText: 'Daireyi bağlı olduğu blok üzerinden seçin. Liste site adına göre gruplanır.',
+        helpText: 'Dairenin bağlı olduğu bloğu seçin (Site / Blok).',
         selectOptions: (data) =>
           [...data.blocks]
             .sort((left, right) => getBlockDisplayLabel(left, data).localeCompare(getBlockDisplayLabel(right, data), 'tr-TR'))
@@ -379,25 +379,58 @@ const CRUD_CONFIG: Record<CrudEntity, CrudConfig> = {
       },
       {
         key: 'ownerId',
-        label: 'Sahip',
+        label: 'Kat Maliki (Sahip)',
         type: 'select',
-        placeholder: 'Sahip seçin',
-        helpText: 'Dairenin tapu sahibi olan kullanıcıyı seçin.',
-        selectOptions: (data) => data.users.map((user) => ({ label: getUserDisplayLabel(user), value: user.id })),
+        placeholder: '— Sahip Seçilmedi (İsteğe Bağlı) —',
+        required: false,
+        helpText: 'Dairenin tapu sahibi olan kişiyi seçin (İsteğe bağlı).',
+        selectOptions: (data) => {
+          const ownerOptions = data.owners.map((owner) => {
+            const apt = data.apartments.find((a) => a.id === owner.apartmentId)
+            const aptLabel = apt ? ` [${apt.apartmentNumber}]` : ''
+            return {
+              label: `👤 ${owner.fullName}${owner.phone ? ` (${owner.phone})` : ''}${aptLabel}`,
+              value: owner.id,
+            }
+          })
+          const userOptions = data.users
+            .filter((u) => !data.owners.some((o) => o.id === u.id || o.email === u.email))
+            .map((user) => ({
+              label: `👤 ${user.fullName} (${user.email})`,
+              value: user.id,
+            }))
+          return [...ownerOptions, ...userOptions]
+        },
       },
       {
         key: 'residentId',
-        label: 'Kiracı',
+        label: 'Kiracı / Sakin',
         type: 'select',
-        placeholder: 'Kiracı seçin',
-        helpText: 'İsteğe bağlı, fiili oturan kullanıcıyı seçin.',
-        selectOptions: (data) => data.users.map((user) => ({ label: getUserDisplayLabel(user), value: user.id })),
+        placeholder: '— Kiracı Yok / Boş Daire (İsteğe Bağlı) —',
+        required: false,
+        helpText: 'Dairede fiilen oturan kiracıyı seçin (İsteğe bağlı).',
+        selectOptions: (data) => {
+          const tenantOptions = data.tenants.map((tenant) => {
+            const rent = tenant.monthlyRent ? ` - ${tenant.monthlyRent} ₺` : ''
+            return {
+              label: `🔑 ${tenant.fullName}${tenant.phone ? ` (${tenant.phone})` : ''}${rent}`,
+              value: tenant.id,
+            }
+          })
+          const userOptions = data.users
+            .filter((u) => !data.tenants.some((t) => t.id === u.id || t.email === u.email))
+            .map((user) => ({
+              label: `🔑 ${user.fullName} (${user.email})`,
+              value: user.id,
+            }))
+          return [...tenantOptions, ...userOptions]
+        },
       },
-      { key: 'apartmentNumber', label: 'Daire numarası', type: 'text', required: true, helpText: 'Blok içindeki benzersiz daire numarasını girin.' },
+      { key: 'apartmentNumber', label: 'Daire Numarası', type: 'text', required: true, helpText: 'Blok içindeki benzersiz daire no (Örn. D:1, No:5).' },
       { key: 'floor', label: 'Kat', type: 'number', required: true, helpText: 'Dairenin bulunduğu kat numarası.' },
-      { key: 'apartmentType', label: 'Tip', type: 'text', required: true, helpText: 'Örn. 2+1, 3+1, stüdyo.' },
-      { key: 'tapuNumber', label: 'Tapu numarası', type: 'text', required: true, helpText: 'Varsa resmi tapu numarasını girin.' },
-      { key: 'isActive', label: 'Aktif', type: 'checkbox' },
+      { key: 'apartmentType', label: 'Daire Tipi', type: 'text', required: true, helpText: 'Örn. 2+1, 3+1, Dubleks, Stüdyo.' },
+      { key: 'tapuNumber', label: 'Tapu Numarası', type: 'text', required: false, helpText: 'Varsa resmi tapu numarasını girin (İsteğe bağlı).' },
+      { key: 'isActive', label: 'Aktif Daire', type: 'checkbox' },
     ],
     getInitialValues: () => ({
       blockId: '',
@@ -420,13 +453,13 @@ const CRUD_CONFIG: Record<CrudEntity, CrudConfig> = {
       isActive: Boolean(row.isActive ?? true),
     }),
     toPayload: (values) => ({
-      blockId: values.blockId ? values.blockId : null,
-      ownerId: values.ownerId ? values.ownerId : null,
-      residentId: values.residentId ? values.residentId : null,
-      apartmentNumber: String(values.apartmentNumber ?? ''),
+      blockId: values.blockId ? String(values.blockId) : null,
+      ownerId: values.ownerId ? String(values.ownerId) : null,
+      residentId: values.residentId ? String(values.residentId) : null,
+      apartmentNumber: String(values.apartmentNumber ?? '').trim(),
       floor: Number(values.floor ?? 1),
-      apartmentType: String(values.apartmentType ?? '2+1'),
-      tapuNumber: String(values.tapuNumber ?? ''),
+      apartmentType: String(values.apartmentType ?? '2+1').trim(),
+      tapuNumber: values.tapuNumber ? String(values.tapuNumber).trim() : null,
       isActive: Boolean(values.isActive ?? true),
     }),
   },
